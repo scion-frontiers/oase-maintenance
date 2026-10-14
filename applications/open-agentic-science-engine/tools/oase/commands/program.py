@@ -44,6 +44,7 @@ from ..common import (
 from ..core import controlstore
 from ..core.concepts import CONCEPT_SCHEMA
 from ..core.errors import ArtifactError, Refusal, SchemaError
+from ..core.legacy import LEGACY_PROJECT_MARKER, PROJECT_MARKER, check_program_root
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -60,12 +61,19 @@ _ACCEPTED_STATE = "scientifically_accepted"
 def _resolve_source(source: str) -> Path:
     """Resolve the source path to a project root containing ``.oase/control/``.
 
-    Accepts either a project root (containing ``.oase/control/``) or a
-    direct path to a ``.oase/control/`` directory.  Returns the project
-    root in both cases.
+    Accepts a project root, or any path inside its ``.oase/`` (e.g.
+    ``.oase/control/``). Returns the project root. The root then goes
+    through the same legacy check as every other program root
+    (:func:`~oase.core.legacy.check_program_root`); a path inside
+    ``.dde/`` maps to its root the same way, so it is refused rather than
+    reported as "no control plane".
 
     Raises
     ------
+    LegacyProgramError
+        If the root holds a pre-rename ``.dde/`` marker, with or without
+        ``.oase/``. Without this, the markdown fallback in ``resume``
+        would import nothing and exit 0.
     ArtifactError
         If the path is not a readable directory or does not contain an
         OASE control plane.
@@ -78,15 +86,19 @@ def _resolve_source(source: str) -> Path:
             "or its .oase/control/ directory",
         )
 
-    # If pointing directly at a .oase/control/ directory, go up two levels.
-    if path.name == "control" and path.parent.name == ".oase":
-        project_root = path.parent.parent
-        if (project_root / controlstore.CONTROL_DIR).is_dir():
-            return project_root
+    # The program root: the path itself when it holds a marker; otherwise
+    # the directory holding the nearest .oase/ or .dde/ the path is inside.
+    markers = (PROJECT_MARKER, LEGACY_PROJECT_MARKER)
+    root = path
+    if not any((path / m).is_dir() for m in markers):
+        for part in (path, *path.parents):
+            if part.name in markers:
+                root = part.parent
+                break
+    check_program_root(root, "program resume SOURCE")
 
-    # Check if it's a project root with .oase/control/ inside.
-    if (path / controlstore.CONTROL_DIR).is_dir():
-        return path
+    if (root / controlstore.CONTROL_DIR).is_dir():
+        return root
 
     raise ArtifactError(
         f"source path does not contain a oase control plane: {path}",

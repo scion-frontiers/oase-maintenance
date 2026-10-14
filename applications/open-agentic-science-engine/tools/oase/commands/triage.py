@@ -38,6 +38,7 @@ from ..common import (
     pass_state,
 )
 from ..core.errors import ProjectRootError, SchemaError
+from ..core.legacy import LegacyProgramError
 from ..core.output import Emitter
 from ..core.triage import (
     TriageBudget,
@@ -187,6 +188,10 @@ def run_cmd(
     project_root: str | None = None
     try:
         project_root = str(state.project().root)
+    except LegacyProgramError:
+        # A pre-rename DDE program was found. Running on without it would
+        # silently skip persisting to its control store.
+        raise
     except ProjectRootError:
         # No project context available (no --project, no $OASE_PROJECT,
         # no .oase/ walk-up discovery).  Triage can still run without

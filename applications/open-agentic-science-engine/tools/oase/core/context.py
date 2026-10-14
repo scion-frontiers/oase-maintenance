@@ -22,6 +22,11 @@ Resolution order:
   2. walk up from CWD looking for a `.oase/` marker directory
   3. fail loudly — never silently write into CWD
 
+Every root, however it is found (and the target of `init_project`, plus
+the program enclosing it), goes through legacy.check_program_root: a
+root holding the pre-rename `.dde/` marker is refused, with or without
+`.oase/`, so its state is never silently ignored. See core/legacy.py.
+
 Additionally, the OASE repo itself is refused as a project root. In
 development /workspace *is* the OASE repo, and writing raw/ into it
 would pollute the repository.
@@ -34,14 +39,21 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .errors import ProjectRootError, SchemaError
+from .legacy import (
+    LEGACY_PROJECT_MARKER,
+    PROJECT_MARKER,
+    check_program_root,
+    find_marked_dir,
+)
 from .paths import is_safe_to_open
 
 # Marker placed at the root of the OASE *source repo*. Its presence
 # means "this directory is the toolchain, not a drug program".
 REPO_MARKER = ".oase-repo"
 
-# Marker directory identifying a oase *program* directory.
-PROJECT_MARKER = ".oase"
+# PROJECT_MARKER (".oase") identifies an OASE *program* directory. It is
+# defined in legacy.py next to the pre-rename ".dde" marker and imported
+# above.
 
 # One directory per artifact class (§4). Keys are artifact classes used
 # by subcommands; values are paths relative to the project root.
@@ -179,9 +191,14 @@ def resolve_project(explicit: str | os.PathLike | None = None) -> ProjectContext
         return _validate(root, "OASE_PROJECT")
 
     here = Path.cwd().resolve()
-    for candidate in (here, *here.parents):
-        if (candidate / PROJECT_MARKER).is_dir():
-            return _validate(candidate, f"{PROJECT_MARKER}/ walk-up")
+    candidate = find_marked_dir(here)
+    if candidate is not None:
+        marker = (
+            PROJECT_MARKER
+            if (candidate / PROJECT_MARKER).is_dir()
+            else LEGACY_PROJECT_MARKER
+        )
+        return _validate(candidate, f"{marker}/ walk-up")
 
     raise ProjectRootError(
         "could not resolve the OASE project root",
@@ -189,7 +206,9 @@ def resolve_project(explicit: str | os.PathLike | None = None) -> ProjectContext
         "and OASE_PROJECT is not set",
         remedy=(
             "set OASE_PROJECT to your program directory, or run "
-            "`oase init <dir>` to create one"
+            "`oase init <dir>` to create a new one. An existing DDE program "
+            f"must be migrated (rename {LEGACY_PROJECT_MARKER}/ to "
+            f"{PROJECT_MARKER}/), not re-initialised"
         ),
     )
 
@@ -211,6 +230,7 @@ def _validate(root: Path, source: str) -> ProjectContext:
                 "           export OASE_PROJECT=/workspace/my-program"
             ),
         )
+    check_program_root(root, source)
     if not os.access(root, os.W_OK):
         raise ProjectRootError(
             f"project root is not writable: {root}",
@@ -273,6 +293,13 @@ def init_project(path: str | os.PathLike) -> Path:
             f"refusing to initialise a program inside the OASE source repo: {root}",
             remedy="choose a directory outside the repo",
         )
+    check_program_root(root, "oase init")
+    # A new program inside a legacy one would shadow it: walk-up from
+    # anywhere below would stop at the new, empty program and never reach
+    # the legacy refusal. Same walk-up as resolve_project.
+    enclosing = find_marked_dir(root.parent)
+    if enclosing is not None:
+        check_program_root(enclosing, "oase init (program enclosing the target)")
     (root / PROJECT_MARKER).mkdir(parents=True, exist_ok=True)
 
     # --- Layer 0: raw artifact directories ---

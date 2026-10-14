@@ -94,6 +94,7 @@ from .common import AppState, OASEGroup, enforce_phase_two
 from .core import provenance
 from .core.context import init_project
 from .core.env import CLI_VERSION
+from .core.legacy import legacy_env_messages
 from .core.toolchain import check_integrity
 
 
@@ -114,6 +115,18 @@ def cli(ctx: click.Context, project_override: str | None) -> None:
     working directory.
     """
     ctx.obj = AppState(project_override=project_override)
+
+    # Legacy DDE_* environment variables (pre-rename names) are never
+    # honoured. Warn on stderr, and refuse for the ones whose silent loss
+    # sends work to the wrong place. `doctor` reports each variable as a
+    # FAIL/WARN/INFO line instead, so the diagnostic command itself still
+    # runs and nothing is printed twice.
+    if ctx.invoked_subcommand != "doctor":
+        warnings, refusal = legacy_env_messages(os.environ)
+        for line in warnings:
+            print(line, file=sys.stderr)
+        if refusal is not None:
+            raise refusal
 
     # One-time dirty-source warning (#127). Suppressible for legitimate
     # development via OASE_NO_DIRTY_WARNING=1.

@@ -37,6 +37,7 @@ import click
 from ..common import AppState, pass_state
 from ..core import env, envstamp
 from ..core.errors import OASEError
+from ..core.legacy import REFUSE, scan_legacy_env
 from ..core.thresholds import UNRESOLVED, declared_sets
 from ..core.toolchain import check_integrity
 
@@ -364,6 +365,37 @@ def _check_project(report: Report, state: AppState) -> None:
     else:
         detail = f"{ctx.root} (via {ctx.source})"
     report.add("project root", OK, detail)
+
+
+def _check_legacy_env(report: Report) -> None:
+    """Are any pre-rename DDE_* environment variables still set?
+
+    The CLI entry point refuses or warns on these before any other
+    command runs. For `doctor` it does neither, so the full report is
+    still visible and each variable is reported once, here.
+    """
+    findings = scan_legacy_env(os.environ)
+    if not findings:
+        report.add("legacy DDE_* variables", OK, "none set")
+        return
+    for f in findings:
+        name = f"legacy variable {f.legacy}"
+        if f.action is None:
+            report.add(name, INFO, f"ignored; {f.current} is also set and is used")
+        elif f.action == REFUSE:
+            report.add(
+                name,
+                FAIL,
+                f"set without {f.current}; every other oase command refuses to run",
+                f"rename {f.legacy} to {f.current}",
+            )
+        else:
+            report.add(
+                name,
+                WARN,
+                f"set without {f.current}; OASE ignores it",
+                f"rename {f.legacy} to {f.current}",
+            )
 
 
 #: Bound on the sidecar walk. A doctor run must stay fast enough that
@@ -1472,8 +1504,10 @@ def doctor(state: AppState, as_json: bool, strict: bool) -> None:
 
     Project root is resolved in order: (1) OASE_PROJECT environment variable,
     (2) walk up from CWD looking for a .oase/ marker directory, (3) fail with
-    guidance. Run `oase init <dir>` to create a project directory, or set
-    OASE_PROJECT explicitly.
+    guidance. Run `oase init <dir>` to create a new project directory, or set
+    OASE_PROJECT explicitly. A program root holding a legacy DDE marker
+    (.dde/, with or without .oase/) is reported as a failure, as are
+    legacy DDE_* environment variables.
     """
     report = Report()
     _check_python(report)
@@ -1482,6 +1516,7 @@ def doctor(state: AppState, as_json: bool, strict: bool) -> None:
     _check_env_drift(report)
     _check_env_source(report)
     _check_project(report, state)
+    _check_legacy_env(report)
     _check_env_partition(report, state)
     _check_packages(report)
     _check_binaries(report)
