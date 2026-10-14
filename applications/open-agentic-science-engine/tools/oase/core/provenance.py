@@ -46,6 +46,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import click
+
 from . import env, output
 from .errors import ArtifactError, Refusal
 from .paths import confine_path, is_safe_to_open
@@ -1127,7 +1129,27 @@ class Sidecar:
 
 
 def _get_project_root() -> Path | None:
-    """Try to discover the project root. Returns None if unavailable."""
+    """Return the root of the project the running command writes into.
+
+    Under the CLI this is the root the command itself resolved through
+    ``AppState.project()``, so ``--project`` is honoured and the
+    confinement guard in :func:`write_analysis` checks against the same
+    program the command is writing into. A resolution error there
+    propagates, as it would from the command.
+
+    Without an active ``AppState`` (library use, direct calls in tests,
+    or a worker thread, since the click context is thread-local), it
+    falls back to ``$OASE_PROJECT`` / ``.oase/`` walk-up and returns None
+    when no project resolves; callers then skip confinement and source
+    normalisation.
+    """
+    from ..common import AppState
+
+    ctx = click.get_current_context(silent=True)
+    state = ctx.find_object(AppState) if ctx is not None else None
+    if isinstance(state, AppState):
+        return state.project().root.resolve()
+
     try:
         from .context import resolve_project
 
